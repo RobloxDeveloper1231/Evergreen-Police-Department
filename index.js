@@ -11,15 +11,15 @@ const client = new Client({
     ]
 });
 
-// --- CONFIG (CRITICAL: PASTE YOUR ACTUAL IDS HERE) ---
+// --- CONFIG ---
 const CONFIG = {
-GIVEAWAY_CHAN: '1487295456387137567', 
-EVENT_CHAN: '1488192668914941952', 
-LOG_CHAN: '1488193057131069542', 
-PD_ROLE: '1485259419011780686', 
-SUPPORT_ROLE: '1487335311292895262', // ONLY THIS ROLE WILL BE PINGED 
-HQ_ROLE: '1485259419192135829', 
-CATEGORY: '1487341154084323338'
+    GIVEAWAY_CHAN: '1487295456387137567', 
+    EVENT_CHAN: '1488192668914941952', 
+    LOG_CHAN: '1488193057131069542', 
+    PD_ROLE: '1485259419011780686', 
+    SUPPORT_ROLE: '1487335311292895262', 
+    HQ_ROLE: '1485259419192135829', 
+    CATEGORY: '1487341154084323338'
 };
 
 const giveawayEntries = new Map();
@@ -39,7 +39,7 @@ async function logAction(title, description, color = 0x5865F2) {
     logChan.send({ embeds: [embed] });
 }
 
-// --- MESSAGE LOGS (DELETE/EDIT) ---
+// --- MESSAGE LOGS ---
 client.on('messageDelete', async (message) => {
     if (message.author?.bot || !message.content) return;
     logAction('🗑️ Message Deleted', `**Author:** ${message.author}\n**Channel:** ${message.channel}\n**Content:** ${message.content}`, 0xFF0000);
@@ -50,7 +50,7 @@ client.on('messageUpdate', async (oldMsg, newMsg) => {
     logAction('📝 Message Edited', `**Author:** ${oldMsg.author}\n**Channel:** ${oldMsg.channel}\n**Before:** ${oldMsg.content}\n**After:** ${newMsg.content}`, 0xFFFF00);
 });
 
-// --- COMMANDS (FIXED DESCRIPTIONS) ---
+// --- COMMANDS ---
 const commands = [
     new SlashCommandBuilder().setName('setup-tickets').setDescription('Setup ticket message'),
     new SlashCommandBuilder().setName('giveaway').setDescription('Start giveaway').addStringOption(o => o.setName('prize').setRequired(true).setDescription('The prize')).addIntegerOption(o => o.setName('duration').setRequired(true).setDescription('Duration in minutes')),
@@ -92,17 +92,24 @@ client.on('messageCreate', async message => {
 // --- INTERACTIONS ---
 client.on('interactionCreate', async interaction => {
     if (interaction.isButton()) {
-        const claimerId = ticketClaimers.get(interaction.channel.id);
+        let claimerId = ticketClaimers.get(interaction.channel.id);
 
+        // Backup: If bot restarted, try to find who claimed by reading the message content
+        if (!claimerId && interaction.message.content.includes('claimed by')) {
+            const match = interaction.message.content.match(/<@!?(\d+)>/);
+            if (match) claimerId = match[1];
+        }
+
+        // 1. OPEN TICKET
         if (interaction.customId === 'open_ticket') {
             const channel = await interaction.guild.channels.create({
                 name: `ticket-${interaction.user.username}`,
                 type: ChannelType.GuildText,
                 parent: CONFIG.CATEGORY,
                 permissionOverwrites: [
-                    { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-                    { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
-                    { id: CONFIG.SUPPORT_ROLE, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+                    { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] }, // Deny Everyone
+                    { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }, // Allow Creator
+                    { id: CONFIG.SUPPORT_ROLE, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }, // Allow ONLY Support Role
                 ],
             });
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Success));
@@ -115,6 +122,7 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({ content: `Ticket created: ${channel}`, ephemeral: true });
         }
 
+        // 2. CLAIM TICKET
         if (interaction.customId === 'claim_ticket') {
             ticketClaimers.set(interaction.channel.id, interaction.user.id);
             const row = new ActionRowBuilder().addComponents(
@@ -124,24 +132,29 @@ client.on('interactionCreate', async interaction => {
             return interaction.update({ content: `✅ Ticket claimed by ${interaction.user}`, components: [row] });
         }
 
+        // 3. UNCLAIM (FIXED LOGIC)
         if (interaction.customId === 'unclaim_ticket') {
             if (interaction.user.id !== claimerId) return interaction.reply({ content: "❌ Only the claimer can unclaim.", ephemeral: true });
+            
             ticketClaimers.delete(interaction.channel.id);
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Success));
-            return interaction.update({ content: "⚠️ Ticket unclaimed.", components: [row] });
+            return interaction.update({ content: "⚠️ Ticket unclaimed. Support is needed!", components: [row] });
         }
 
+        // 4. CLOSE (FIXED LOGIC)
         if (interaction.customId === 'close_ticket') {
             if (interaction.user.id !== claimerId) return interaction.reply({ content: "❌ Only the claimer can close.", ephemeral: true });
+            
             await interaction.reply("🔒 Closing in 5s...");
             logAction('📁 Ticket Closed', `By: ${interaction.user}\nChannel: ${interaction.channel.name}`, 0xFF0000);
             setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
             return;
         }
 
+        // 5. GIVEAWAY BUTTONS
         if (interaction.customId === 'enter_g' || interaction.customId === 'leave_g') {
             const entrySet = giveawayEntries.get(interaction.message.id);
-            if (!entrySet) return interaction.reply({ content: "❌ Error", ephemeral: true });
+            if (!entrySet) return interaction.reply({ content: "❌ Error: Giveaway session expired.", ephemeral: true });
             interaction.customId === 'enter_g' ? entrySet.add(interaction.user.id) : entrySet.delete(interaction.user.id);
             return interaction.reply({ content: interaction.customId === 'enter_g' ? "🎉 Entered!" : "👋 Left.", ephemeral: true });
         }
@@ -150,6 +163,7 @@ client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
     const { commandName, options, user, member } = interaction;
 
+    // EVENT COMMAND
     if (commandName === 'event') {
         if (!member.roles.cache.has(CONFIG.HQ_ROLE)) return interaction.reply({ content: "HQ Only", ephemeral: true });
         const embed = new EmbedBuilder().setTitle('📢 ECPD EVENT').addFields(
@@ -165,6 +179,7 @@ client.on('interactionCreate', async interaction => {
         }
     }
 
+    // GIVEAWAY COMMAND
     if (commandName === 'giveaway') {
         const prize = options.getString('prize');
         let duration = options.getInteger('duration');
@@ -181,16 +196,18 @@ client.on('interactionCreate', async interaction => {
         }, 60000);
     }
 
+    // ROLL COMMAND
     if (commandName === 'roll') {
         const set = giveawayEntries.get(options.getString('messageid'));
-        if (!set || set.size === 0) return interaction.reply("No entries.");
+        if (!set || set.size === 0) return interaction.reply("No entries found or bot restarted.");
         const win = Array.from(set)[Math.floor(Math.random() * set.size)];
         interaction.reply(`🎲 **Winner:** <@${win}>\n${options.getString('text')}`);
     }
 
+    // SETUP TICKETS COMMAND
     if (commandName === 'setup-tickets') {
         const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('open_ticket').setLabel('Open Ticket').setStyle(ButtonStyle.Primary));
-        interaction.reply({ embeds: [new EmbedBuilder().setTitle('Support').setDescription('Click to open.')], components: [row] });
+        interaction.reply({ embeds: [new EmbedBuilder().setTitle('ECPD Support').setDescription('Click the button to open a ticket.')], components: [row] });
     }
 });
 
