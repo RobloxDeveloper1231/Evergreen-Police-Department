@@ -11,15 +11,15 @@ const client = new Client({
     ]
 });
 
-// --- CONFIG (PASTE YOUR ACTUAL IDS HERE) ---
+// --- CONFIG (CRITICAL: PASTE YOUR ACTUAL IDS HERE) ---
 const CONFIG = {
-    GIVEAWAY_CHAN: '1487295456387137567',
-    EVENT_CHAN: '1488192668914941952',
-    LOG_CHAN: '1488193057131069542',
-    PD_ROLE: '1485259419011780686',
-    SUPPORT_ROLE: '1487335311292895262', // ONLY THIS ROLE WILL BE PINGED
-    HQ_ROLE: '1485259419192135829',
-    CATEGORY: '1487341154084323338'
+GIVEAWAY_CHAN: '1487295456387137567', 
+EVENT_CHAN: '1488192668914941952', 
+LOG_CHAN: '1488193057131069542', 
+PD_ROLE: '1485259419011780686', 
+SUPPORT_ROLE: '1487335311292895262', // ONLY THIS ROLE WILL BE PINGED 
+HQ_ROLE: '1485259419192135829', 
+CATEGORY: '1487341154084323338'
 };
 
 const giveawayEntries = new Map();
@@ -50,12 +50,18 @@ client.on('messageUpdate', async (oldMsg, newMsg) => {
     logAction('📝 Message Edited', `**Author:** ${oldMsg.author}\n**Channel:** ${oldMsg.channel}\n**Before:** ${oldMsg.content}\n**After:** ${newMsg.content}`, 0xFFFF00);
 });
 
-// --- COMMANDS ---
+// --- COMMANDS (FIXED DESCRIPTIONS) ---
 const commands = [
     new SlashCommandBuilder().setName('setup-tickets').setDescription('Setup ticket message'),
-    new SlashCommandBuilder().setName('giveaway').setDescription('Start giveaway').addStringOption(o => o.setName('prize').setRequired(true).setDescription('Prize')).addIntegerOption(o => o.setName('duration').setRequired(true).setDescription('Mins')),
-    new SlashCommandBuilder().setName('roll').setDescription('Roll winner').addStringOption(o => o.setName('messageid').setRequired(true).setDescription('ID')).addStringOption(o => o.setName('text').setRequired(true).setDescription('Text')),
-    new SlashCommandBuilder().setName('event').setDescription('Post Event').addStringOption(o => o.setName('name').setRequired(true)).addStringOption(o => o.setName('host').setRequired(true)).addStringOption(o => o.setName('cohost').setRequired(true)).addStringOption(o => o.setName('helpers').setRequired(true)).addStringOption(o => o.setName('rewards').setRequired(true)).addStringOption(o => o.setName('description').setRequired(true))
+    new SlashCommandBuilder().setName('giveaway').setDescription('Start giveaway').addStringOption(o => o.setName('prize').setRequired(true).setDescription('The prize')).addIntegerOption(o => o.setName('duration').setRequired(true).setDescription('Duration in minutes')),
+    new SlashCommandBuilder().setName('roll').setDescription('Roll winner').addStringOption(o => o.setName('messageid').setRequired(true).setDescription('The Message ID')).addStringOption(o => o.setName('text').setRequired(true).setDescription('Extra text')),
+    new SlashCommandBuilder().setName('event').setDescription('Post Event')
+        .addStringOption(o => o.setName('name').setRequired(true).setDescription('Event Name'))
+        .addStringOption(o => o.setName('host').setRequired(true).setDescription('Host Name'))
+        .addStringOption(o => o.setName('cohost').setRequired(true).setDescription('Co-Host Name'))
+        .addStringOption(o => o.setName('helpers').setRequired(true).setDescription('Helpers Names'))
+        .addStringOption(o => o.setName('rewards').setRequired(true).setDescription('Possible Rewards'))
+        .addStringOption(o => o.setName('description').setRequired(true).setDescription('Event Description'))
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -119,14 +125,14 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.customId === 'unclaim_ticket') {
-            if (interaction.user.id !== claimerId) return interaction.reply({ content: "❌ You didn't claim this.", ephemeral: true });
+            if (interaction.user.id !== claimerId) return interaction.reply({ content: "❌ Only the claimer can unclaim.", ephemeral: true });
             ticketClaimers.delete(interaction.channel.id);
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Success));
             return interaction.update({ content: "⚠️ Ticket unclaimed.", components: [row] });
         }
 
         if (interaction.customId === 'close_ticket') {
-            if (interaction.user.id !== claimerId) return interaction.reply({ content: "❌ You didn't claim this.", ephemeral: true });
+            if (interaction.user.id !== claimerId) return interaction.reply({ content: "❌ Only the claimer can close.", ephemeral: true });
             await interaction.reply("🔒 Closing in 5s...");
             logAction('📁 Ticket Closed', `By: ${interaction.user}\nChannel: ${interaction.channel.name}`, 0xFF0000);
             setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
@@ -135,7 +141,7 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.customId === 'enter_g' || interaction.customId === 'leave_g') {
             const entrySet = giveawayEntries.get(interaction.message.id);
-            if (!entrySet) return interaction.reply({ content: "❌ Data lost.", ephemeral: true });
+            if (!entrySet) return interaction.reply({ content: "❌ Error", ephemeral: true });
             interaction.customId === 'enter_g' ? entrySet.add(interaction.user.id) : entrySet.delete(interaction.user.id);
             return interaction.reply({ content: interaction.customId === 'enter_g' ? "🎉 Entered!" : "👋 Left.", ephemeral: true });
         }
@@ -146,24 +152,16 @@ client.on('interactionCreate', async interaction => {
 
     if (commandName === 'event') {
         if (!member.roles.cache.has(CONFIG.HQ_ROLE)) return interaction.reply({ content: "HQ Only", ephemeral: true });
-        const now = Date.now();
-        if (eventCooldowns.has(user.id) && (now - eventCooldowns.get(user.id) < 30 * 60000)) return interaction.reply({ content: "30m Cooldown!", ephemeral: true });
-
         const embed = new EmbedBuilder().setTitle('📢 ECPD EVENT').addFields(
             { name: 'Event', value: options.getString('name') },
             { name: 'Host', value: options.getString('host'), inline: true },
-            { name: 'Co-Host', value: options.getString('cohost'), inline: true },
-            { name: 'Helpers', value: options.getString('helpers'), inline: true },
             { name: 'Rewards', value: options.getString('rewards') },
             { name: 'Description', value: options.getString('description') }
         ).setColor(0x00AAFF);
-
         const eventChan = client.channels.cache.get(CONFIG.EVENT_CHAN);
         if (eventChan) {
             eventChan.send({ content: `<@&${CONFIG.PD_ROLE}>`, embeds: [embed] });
-            eventCooldowns.set(user.id, now);
-            logAction('📢 Event Posted', `By: ${user}`);
-            return interaction.reply({ content: "✅ Posted!", ephemeral: true });
+            return interaction.reply({ content: "✅ Event Posted!", ephemeral: true });
         }
     }
 
