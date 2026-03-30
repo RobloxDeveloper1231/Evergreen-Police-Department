@@ -61,7 +61,7 @@ client.on('interactionCreate', async interaction => {
 
     // 1. EVENT COMMAND
     if (commandName === 'event') {
-        const HQ_ROLE_ID = 'YOUR_HQ_ROLE_ID_HERE'; // <--- PUT YOUR HQ ROLE ID HERE
+        const HQ_ROLE_ID = '1485259419192135829'; // <--- PUT YOUR HQ ROLE ID HERE
         
         if (!member.roles.cache.has(HQ_ROLE_ID)) {
             return interaction.reply({ content: "❌ Only HQ ranks can host events.", ephemeral: true });
