@@ -11,14 +11,16 @@ const client = new Client({
     ]
 });
 
-// --- CONFIG (UPDATE THESE) ---
-const GIVEAWAY_CHANNEL_ID = '1487295456387137567';
-const EVENT_CHANNEL_ID = '1488192668914941952'; 
-const LOG_CHANNEL_ID = '1488193057131069542'; // Logs all bot actions here
-const PD_ROLE_ID = '1485259419011780686';             
-const SUPPORT_TEAM_ROLE_ID = '1487335311292895262'; 
-const HQ_ROLE_ID = '1485259419192135829'; 
-const CATEGORY_ID = '1487341154084323338'; 
+// --- CONFIG (PASTE YOUR ACTUAL IDS HERE) ---
+const CONFIG = {
+    GIVEAWAY_CHAN: '1487295456387137567',
+    EVENT_CHAN: '1488192668914941952',
+    LOG_CHAN: '1488193057131069542',
+    PD_ROLE: '1485259419011780686',
+    SUPPORT_ROLE: '1487335311292895262', // ONLY THIS ROLE WILL BE PINGED
+    HQ_ROLE: '1485259419192135829',
+    CATEGORY: '1487341154084323338'
+};
 
 const giveawayEntries = new Map();
 const ticketClaimers = new Map();
@@ -29,12 +31,31 @@ const app = express();
 app.get('/', (req, res) => res.send('ECPD Online'));
 app.listen(10000);
 
-// --- COMMAND REGISTRATION ---
+// --- LOGGING HELPER ---
+async function logAction(title, description, color = 0x5865F2) {
+    const logChan = client.channels.cache.get(CONFIG.LOG_CHAN);
+    if (!logChan) return;
+    const embed = new EmbedBuilder().setTitle(title).setDescription(description).setColor(color).setTimestamp();
+    logChan.send({ embeds: [embed] });
+}
+
+// --- MESSAGE LOGS (DELETE/EDIT) ---
+client.on('messageDelete', async (message) => {
+    if (message.author?.bot || !message.content) return;
+    logAction('🗑️ Message Deleted', `**Author:** ${message.author}\n**Channel:** ${message.channel}\n**Content:** ${message.content}`, 0xFF0000);
+});
+
+client.on('messageUpdate', async (oldMsg, newMsg) => {
+    if (oldMsg.author?.bot || oldMsg.content === newMsg.content) return;
+    logAction('📝 Message Edited', `**Author:** ${oldMsg.author}\n**Channel:** ${oldMsg.channel}\n**Before:** ${oldMsg.content}\n**After:** ${newMsg.content}`, 0xFFFF00);
+});
+
+// --- COMMANDS ---
 const commands = [
     new SlashCommandBuilder().setName('setup-tickets').setDescription('Setup ticket message'),
     new SlashCommandBuilder().setName('giveaway').setDescription('Start giveaway').addStringOption(o => o.setName('prize').setRequired(true).setDescription('Prize')).addIntegerOption(o => o.setName('duration').setRequired(true).setDescription('Mins')),
     new SlashCommandBuilder().setName('roll').setDescription('Roll winner').addStringOption(o => o.setName('messageid').setRequired(true).setDescription('ID')).addStringOption(o => o.setName('text').setRequired(true).setDescription('Text')),
-    new SlashCommandBuilder().setName('event').setDescription('Post Event').addStringOption(o => o.setName('name').setRequired(true).setDescription('Name')).addStringOption(o => o.setName('host').setRequired(true).setDescription('Host')).addStringOption(o => o.setName('cohost').setRequired(true).setDescription('Co-Host')).addStringOption(o => o.setName('helpers').setRequired(true).setDescription('Helpers')).addStringOption(o => o.setName('rewards').setRequired(true).setDescription('Rewards')).addStringOption(o => o.setName('description').setRequired(true).setDescription('Desc'))
+    new SlashCommandBuilder().setName('event').setDescription('Post Event').addStringOption(o => o.setName('name').setRequired(true)).addStringOption(o => o.setName('host').setRequired(true)).addStringOption(o => o.setName('cohost').setRequired(true)).addStringOption(o => o.setName('helpers').setRequired(true)).addStringOption(o => o.setName('rewards').setRequired(true)).addStringOption(o => o.setName('description').setRequired(true))
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -44,43 +65,25 @@ client.once('ready', async () => {
     console.log(`✅ ECPD Online: ${client.user.tag}`);
 });
 
-// --- HELPER: LOGGING FUNCTION ---
-async function logAction(title, description, color = 0x5865F2) {
-    const logChan = client.channels.cache.get(LOG_CHANNEL_ID);
-    if (!logChan) return;
-    const embed = new EmbedBuilder().setTitle(title).setDescription(description).setColor(color).setTimestamp();
-    logChan.send({ embeds: [embed] });
-}
-
 // --- PREFIX COMMANDS (!d) ---
 client.on('messageCreate', async message => {
     if (message.author.bot || !message.content.startsWith('!d')) return;
-
-    // Format: !d (number) (@User) (Word)
     const args = message.content.split(' ');
     if (args.length < 4) return;
-
     const amount = parseInt(args[1]);
     const targetUser = message.mentions.users.first();
     const filterWord = args[3].toLowerCase();
-
-    if (isNaN(amount) || !targetUser) return message.reply("Usage: `!d (number) (@User) (Word)`");
-
-    await message.delete(); // Delete the command message
+    if (isNaN(amount) || !targetUser) return;
 
     const messages = await message.channel.messages.fetch({ limit: 100 });
-    const toDelete = messages.filter(m => 
-        m.author.id === targetUser.id && 
-        m.content.toLowerCase().includes(filterWord)
-    ).first(amount);
-
+    const toDelete = messages.filter(m => m.author.id === targetUser.id && m.content.toLowerCase().includes(filterWord)).first(amount);
     if (toDelete.length > 0) {
         await message.channel.bulkDelete(toDelete);
-        logAction('🗑️ Purge Command Used', `**Admin:** ${message.author}\n**Target:** ${targetUser}\n**Word:** ${filterWord}\n**Count:** ${toDelete.length}`, 0xFFA500);
+        logAction('🗑️ Purge Used', `Admin: ${message.author}\nTarget: ${targetUser}\nWord: ${filterWord}`, 0xFFA500);
     }
 });
 
-// --- INTERACTION HANDLING ---
+// --- INTERACTIONS ---
 client.on('interactionCreate', async interaction => {
     if (interaction.isButton()) {
         const claimerId = ticketClaimers.get(interaction.channel.id);
@@ -89,17 +92,21 @@ client.on('interactionCreate', async interaction => {
             const channel = await interaction.guild.channels.create({
                 name: `ticket-${interaction.user.username}`,
                 type: ChannelType.GuildText,
-                parent: CATEGORY_ID,
+                parent: CONFIG.CATEGORY,
                 permissionOverwrites: [
                     { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
                     { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
-                    { id: SUPPORT_TEAM_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+                    { id: CONFIG.SUPPORT_ROLE, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
                 ],
             });
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Success));
-            await channel.send({ content: `<@&${SUPPORT_TEAM_ROLE_ID}>`, embeds: [new EmbedBuilder().setTitle('🎫 New Ticket').setDescription('Wait for Support.').setColor(0x00FF00)], components: [row] });
-            logAction('🎫 Ticket Opened', `User: ${interaction.user}\nChannel: ${channel}`, 0x00FF00);
-            return interaction.reply({ content: `Ticket: ${channel}`, ephemeral: true });
+            const embed = new EmbedBuilder()
+                .setTitle('🎫 ECPD Support Ticket')
+                .setDescription(`Hello ${interaction.user}, the **Support Team** will be with you shortly.\n\n⚠️ **Lying to our Support Team WILL result in punishment.**`)
+                .setColor(0x00FF00);
+            
+            await channel.send({ content: `<@&${CONFIG.SUPPORT_ROLE}>`, embeds: [embed], components: [row] });
+            return interaction.reply({ content: `Ticket created: ${channel}`, ephemeral: true });
         }
 
         if (interaction.customId === 'claim_ticket') {
@@ -108,29 +115,27 @@ client.on('interactionCreate', async interaction => {
                 new ButtonBuilder().setCustomId('unclaim_ticket').setLabel('Unclaim').setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Danger)
             );
-            logAction('🔒 Ticket Claimed', `User: ${interaction.user}\nChannel: ${interaction.channel.name}`);
             return interaction.update({ content: `✅ Ticket claimed by ${interaction.user}`, components: [row] });
         }
 
         if (interaction.customId === 'unclaim_ticket') {
-            if (interaction.user.id !== claimerId) return interaction.reply({ content: "❌ Only the claimer can unclaim.", ephemeral: true });
+            if (interaction.user.id !== claimerId) return interaction.reply({ content: "❌ You didn't claim this.", ephemeral: true });
             ticketClaimers.delete(interaction.channel.id);
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Success));
-            logAction('🔓 Ticket Unclaimed', `User: ${interaction.user}\nChannel: ${interaction.channel.name}`, 0xFFFF00);
-            return interaction.update({ content: "⚠️ Ticket is now unclaimed.", components: [row] });
+            return interaction.update({ content: "⚠️ Ticket unclaimed.", components: [row] });
         }
 
         if (interaction.customId === 'close_ticket') {
-            if (interaction.user.id !== claimerId) return interaction.reply({ content: "❌ Only the claimer can close.", ephemeral: true });
-            logAction('📁 Ticket Closed', `User: ${interaction.user}\nChannel: ${interaction.channel.name}`, 0xFF0000);
+            if (interaction.user.id !== claimerId) return interaction.reply({ content: "❌ You didn't claim this.", ephemeral: true });
             await interaction.reply("🔒 Closing in 5s...");
+            logAction('📁 Ticket Closed', `By: ${interaction.user}\nChannel: ${interaction.channel.name}`, 0xFF0000);
             setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
             return;
         }
 
         if (interaction.customId === 'enter_g' || interaction.customId === 'leave_g') {
             const entrySet = giveawayEntries.get(interaction.message.id);
-            if (!entrySet) return interaction.reply({ content: "❌ Error", ephemeral: true });
+            if (!entrySet) return interaction.reply({ content: "❌ Data lost.", ephemeral: true });
             interaction.customId === 'enter_g' ? entrySet.add(interaction.user.id) : entrySet.delete(interaction.user.id);
             return interaction.reply({ content: interaction.customId === 'enter_g' ? "🎉 Entered!" : "👋 Left.", ephemeral: true });
         }
@@ -140,7 +145,7 @@ client.on('interactionCreate', async interaction => {
     const { commandName, options, user, member } = interaction;
 
     if (commandName === 'event') {
-        if (!member.roles.cache.has(HQ_ROLE_ID)) return interaction.reply({ content: "HQ Only", ephemeral: true });
+        if (!member.roles.cache.has(CONFIG.HQ_ROLE)) return interaction.reply({ content: "HQ Only", ephemeral: true });
         const now = Date.now();
         if (eventCooldowns.has(user.id) && (now - eventCooldowns.get(user.id) < 30 * 60000)) return interaction.reply({ content: "30m Cooldown!", ephemeral: true });
 
@@ -148,30 +153,29 @@ client.on('interactionCreate', async interaction => {
             { name: 'Event', value: options.getString('name') },
             { name: 'Host', value: options.getString('host'), inline: true },
             { name: 'Co-Host', value: options.getString('cohost'), inline: true },
+            { name: 'Helpers', value: options.getString('helpers'), inline: true },
             { name: 'Rewards', value: options.getString('rewards') },
             { name: 'Description', value: options.getString('description') }
         ).setColor(0x00AAFF);
 
-        const eventChan = client.channels.cache.get(EVENT_CHANNEL_ID);
+        const eventChan = client.channels.cache.get(CONFIG.EVENT_CHAN);
         if (eventChan) {
-            eventChan.send({ content: `<@&${PD_ROLE_ID}>`, embeds: [embed] });
+            eventChan.send({ content: `<@&${CONFIG.PD_ROLE}>`, embeds: [embed] });
             eventCooldowns.set(user.id, now);
-            logAction('📢 Event Posted', `Host: ${user}\nEvent: ${options.getString('name')}`);
-            return interaction.reply({ content: "✅ Event Posted!", ephemeral: true });
+            logAction('📢 Event Posted', `By: ${user}`);
+            return interaction.reply({ content: "✅ Posted!", ephemeral: true });
         }
     }
 
-    // [GIVEAWAY AND ROLL REMAIN THE SAME]
     if (commandName === 'giveaway') {
         const prize = options.getString('prize');
         let duration = options.getInteger('duration');
-        const chan = client.channels.cache.get(GIVEAWAY_CHANNEL_ID);
+        const chan = client.channels.cache.get(CONFIG.GIVEAWAY_CHAN);
         const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('enter_g').setLabel('Enter').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('leave_g').setLabel('Leave').setStyle(ButtonStyle.Danger));
         const getEmbed = (d) => new EmbedBuilder().setTitle('🎁 GIVEAWAY').setDescription(`**Prize:** ${prize}\n**Mins:** ${d}`).setColor(0x00FF00);
         const msg = await chan.send({ embeds: [getEmbed(duration)], components: [row] });
         giveawayEntries.set(msg.id, new Set());
         interaction.reply({ content: "Started!", ephemeral: true });
-        logAction('🎁 Giveaway Started', `Host: ${user}\nPrize: ${prize}`);
         const t = setInterval(async () => {
             duration--;
             if (duration <= 0) { clearInterval(t); await msg.edit({ embeds: [getEmbed(0).setTitle('🔴 ENDED')], components: [] }); }
@@ -184,7 +188,11 @@ client.on('interactionCreate', async interaction => {
         if (!set || set.size === 0) return interaction.reply("No entries.");
         const win = Array.from(set)[Math.floor(Math.random() * set.size)];
         interaction.reply(`🎲 **Winner:** <@${win}>\n${options.getString('text')}`);
-        logAction('🎲 Giveaway Rolled', `Rolled by: ${user}\nWinner: <@${win}>`);
+    }
+
+    if (commandName === 'setup-tickets') {
+        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('open_ticket').setLabel('Open Ticket').setStyle(ButtonStyle.Primary));
+        interaction.reply({ embeds: [new EmbedBuilder().setTitle('Support').setDescription('Click to open.')], components: [row] });
     }
 });
 
